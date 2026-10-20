@@ -81,6 +81,7 @@ jobs:
           ARCH: arm
           SUBARCH: arm
         run: |
+          mkdir -p out
           make O=out ARCH=arm lineage_hlte_pn547_defconfig
 
       - name: Build kernel
