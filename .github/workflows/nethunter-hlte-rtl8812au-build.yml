@@ -59,11 +59,13 @@ jobs:
 
       - name: Install build dependencies
         run: |
+          sudo dpkg --add-architecture i386
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential bc bison flex libssl-dev \
             libncurses5-dev git curl ca-certificates \
-            device-tree-compiler
+            device-tree-compiler \
+            libc6:i386 libstdc++6:i386 libncurses5:i386 zlib1g:i386
 
       # این کرنل 3.4/arm32 قدیمی است و با GCC جدید سیستم build نمی‌شود؛
       # طبق مستندات رسمی Kali برای دستگاه‌های پیش از arm64، از
@@ -92,6 +94,7 @@ jobs:
         run: |
           set -o pipefail
           make O=out ARCH=arm -j"$(nproc)" \
+            HOSTCFLAGS="-fcommon" \
             LOCALVERSION="${{ github.event.inputs.localversion }}" 2>&1 | tee build.log
 
       - name: Dump kernel build log tail on failure (as annotation, log storage is unreachable)
