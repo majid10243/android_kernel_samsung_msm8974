@@ -72,11 +72,14 @@ jobs:
       # prebuilt arm-eabi-4.7 گوگل استفاده می‌شود.
       - name: Fetch legacy arm-eabi-4.7 toolchain
         run: |
-          REFS=$(git ls-remote --heads --tags https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-eabi-4.7 2>&1 | head -60 | tr '\n' '|')
-          echo "::error::TOOLCHAIN REMOTE REFS: ${REFS}"
-          git clone --depth 1 \
+          # The default branch (main/master) of this googlesource repo was
+          # emptied to an OWNERS-only placeholder. The real prebuilt
+          # toolchain binaries live at the pre-deprecation commit, still
+          # reachable via old release branches/tags (e.g. kitkat-release).
+          git clone --depth 1 --branch kitkat-release \
             https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-eabi-4.7 \
             "${RUNNER_TEMP}/toolchain"
+          chmod +x "${RUNNER_TEMP}/toolchain/bin/"* || true
           echo "CROSS_COMPILE=${RUNNER_TEMP}/toolchain/bin/arm-eabi-" >> "$GITHUB_ENV"
 
       - name: Configure (lineage_hlte_pn547_defconfig)
