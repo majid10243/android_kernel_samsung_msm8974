@@ -90,8 +90,23 @@ jobs:
           ARCH: arm
           SUBARCH: arm
         run: |
+          set -o pipefail
           make O=out ARCH=arm -j"$(nproc)" \
             LOCALVERSION="${{ github.event.inputs.localversion }}" 2>&1 | tee build.log
+
+      - name: Dump kernel build log tail on failure (as annotation, log storage is unreachable)
+        if: failure()
+        working-directory: kernel
+        run: |
+          python3 - <<'PYEOF'
+          import re
+          with open("build.log", "r", errors="replace") as f:
+              lines = f.readlines()
+          tail = "".join(lines[-80:])
+          tail = tail[-3500:]
+          tail = tail.replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+          print(f"::error::KERNEL BUILD LOG TAIL:%0A{tail}")
+          PYEOF
 
       - name: Verify kernel output exists
         working-directory: kernel
@@ -116,10 +131,23 @@ jobs:
 
       - name: Build rtl8812au.ko external module
         run: |
+          set -o pipefail
           KDIR="$GITHUB_WORKSPACE/kernel/out"
           make -C "$KDIR" M="$GITHUB_WORKSPACE/rtl8812au" \
             ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
             modules 2>&1 | tee module-build.log
+
+      - name: Dump module build log tail on failure (as annotation, log storage is unreachable)
+        if: failure()
+        run: |
+          python3 - <<'PYEOF'
+          with open("module-build.log", "r", errors="replace") as f:
+              lines = f.readlines()
+          tail = "".join(lines[-80:])
+          tail = tail[-3500:]
+          tail = tail.replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+          print(f"::error::MODULE BUILD LOG TAIL:%0A{tail}")
+          PYEOF
 
       - name: Verify module output exists
         run: |
