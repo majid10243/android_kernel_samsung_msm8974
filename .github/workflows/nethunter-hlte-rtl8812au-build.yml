@@ -1,0 +1,162 @@
+name: NetHunter hlte (SM-N9005) kernel build + RTL8812AU module
+
+# دستورالعمل اعمال:
+#   این فایل باید در همین مخزن (فورک شخصی، نه مخزن اصلی 0x4E0x650x6F)
+#   روی شاخه‌ی nethunter-rtl8812au-build قرار داشته باشه.
+#   از تب Actions گیت‌هاب، به‌صورت دستی (workflow_dispatch) اجرا می‌شه.
+#
+# این workflow دو چیز تولید می‌کنه:
+#   1) zImage برای کرنل hlte-eur-los (LineageOS 14.1) — دقیقاً همون کرنلی که
+#      NetHunter رسمی برای این دستگاه/ROM منتشر کرده (defconfig: lineage_hlte_pn547_defconfig
+#      که CONFIG_MACH_HLTEEUR=y داره، تأیید شده با مقایسه‌ی سه defconfig موجود).
+#   2) ماژول خارج‌از‌درخت rtl8812au.ko (درایور Realtek نسخه‌ی 4.3.14، از فورک
+#      DiegoGuidaF/rtl8812AU کامیت 688f6ac5e412ecfa074d33d95e9c11202f301d95،
+#      که طبق مستندات خودش روی کرنل‌های 3.2 تا 4.6 کامپایل شده — کرنل ما 3.4.113 است)
+#      که پشتیبانی چیپ RTL8812AU (آداپتور Alfa AWUS036ACH) و RTL8821AU رو می‌ده،
+#      به‌صورت ماژول بارگذاری‌شونده (insmod/modprobe)، نه کامپایل‌شده داخل خودِ zImage.
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_ref:
+        description: "Branch/tag of the kernel repo to build"
+        required: false
+        default: "nethunter-rtl8812au-build"
+      localversion:
+        description: "LOCALVERSION suffix embedded in the kernel string"
+        required: false
+        default: "-NetHunter-hlte-rtl8812au"
+      driver_ref:
+        description: "Commit of DiegoGuidaF/rtl8812AU to build against"
+        required: false
+        default: "688f6ac5e412ecfa074d33d95e9c11202f301d95"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nethunter-hlte-rtl8812au-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout kernel source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.kernel_ref }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: kernel
+
+      - name: Record build metadata
+        working-directory: kernel
+        run: |
+          echo "KERNEL_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bc bison flex libssl-dev \
+            libncurses5-dev git curl ca-certificates \
+            device-tree-compiler
+
+      # این کرنل 3.4/arm32 قدیمی است و با GCC جدید سیستم build نمی‌شود؛
+      # طبق مستندات رسمی Kali برای دستگاه‌های پیش از arm64، از
+      # prebuilt arm-eabi-4.7 گوگل استفاده می‌شود.
+      - name: Fetch legacy arm-eabi-4.7 toolchain
+        run: |
+          git clone --depth 1 \
+            https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-eabi-4.7 \
+            "${RUNNER_TEMP}/toolchain"
+          echo "CROSS_COMPILE=${RUNNER_TEMP}/toolchain/bin/arm-eabi-" >> "$GITHUB_ENV"
+
+      - name: Configure (lineage_hlte_pn547_defconfig)
+        working-directory: kernel
+        env:
+          ARCH: arm
+          SUBARCH: arm
+        run: |
+          make O=out ARCH=arm lineage_hlte_pn547_defconfig
+
+      - name: Build kernel
+        working-directory: kernel
+        env:
+          ARCH: arm
+          SUBARCH: arm
+        run: |
+          make O=out ARCH=arm -j"$(nproc)" \
+            LOCALVERSION="${{ github.event.inputs.localversion }}" 2>&1 | tee build.log
+
+      - name: Verify kernel output exists
+        working-directory: kernel
+        run: |
+          test -f out/arch/arm/boot/zImage || { echo "::error::zImage not produced"; exit 1; }
+          file out/arch/arm/boot/zImage
+          ls -lh out/arch/arm/boot/zImage
+
+      - name: Prepare kernel for external module build
+        working-directory: kernel
+        run: |
+          make O=out ARCH=arm modules_prepare
+
+      - name: Fetch rtl8812au driver source (pinned commit)
+        run: |
+          git init rtl8812au
+          cd rtl8812au
+          git remote add origin https://github.com/DiegoGuidaF/rtl8812AU.git
+          git fetch --depth 1 origin "${{ github.event.inputs.driver_ref }}"
+          git checkout FETCH_HEAD
+          echo "DRIVER_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Build rtl8812au.ko external module
+        run: |
+          KDIR="$GITHUB_WORKSPACE/kernel/out"
+          make -C "$KDIR" M="$GITHUB_WORKSPACE/rtl8812au" \
+            ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
+            modules 2>&1 | tee module-build.log
+
+      - name: Verify module output exists
+        run: |
+          test -f rtl8812au/8812au.ko || { echo "::error::8812au.ko not produced"; exit 1; }
+          "${CROSS_COMPILE}strip" --strip-unneeded rtl8812au/8812au.ko
+          file rtl8812au/8812au.ko
+          ls -lh rtl8812au/8812au.ko
+
+      - name: Write build-info.txt
+        if: always()
+        run: |
+          {
+            echo "kernel_commit: ${KERNEL_COMMIT}"
+            echo "kernel_ref: ${{ github.event.inputs.kernel_ref }}"
+            echo "driver_commit: ${DRIVER_COMMIT:-unknown}"
+            echo "build_date: ${BUILD_DATE}"
+            echo "defconfig: lineage_hlte_pn547_defconfig"
+            echo "cross_compile: arm-eabi-4.7"
+            echo "localversion: ${{ github.event.inputs.localversion }}"
+          } > build-info.txt
+
+      - name: Upload build logs (always, for debugging)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            kernel/build.log
+            module-build.log
+          retention-days: 14
+
+      - name: Upload kernel + module artifacts (only on success)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hlte-nethunter-rtl8812au
+          path: |
+            kernel/out/arch/arm/boot/zImage
+            rtl8812au/8812au.ko
+            build-info.txt
+          retention-days: 30
