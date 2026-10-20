@@ -72,17 +72,11 @@ jobs:
       # prebuilt arm-eabi-4.7 گوگل استفاده می‌شود.
       - name: Fetch legacy arm-eabi-4.7 toolchain
         run: |
+          REFS=$(git ls-remote --heads --tags https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-eabi-4.7 2>&1 | head -60 | tr '\n' '|')
+          echo "::error::TOOLCHAIN REMOTE REFS: ${REFS}"
           git clone --depth 1 \
             https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-eabi-4.7 \
             "${RUNNER_TEMP}/toolchain"
-          ROOTLISTING=$(ls -la "${RUNNER_TEMP}/toolchain/" 2>&1 | head -40 | tr '\n' '|')
-          echo "::error::TOOLCHAIN ROOT LISTING: ${ROOTLISTING}"
-          LISTING=$(ls -la "${RUNNER_TEMP}/toolchain/bin/" 2>&1 | head -40 | tr '\n' '|')
-          echo "::error::TOOLCHAIN BIN LISTING: ${LISTING}"
-          FILETYPE=$(find "${RUNNER_TEMP}/toolchain/bin" -iname "arm-eabi-gcc*" -exec file {} \; 2>&1 | tr '\n' '|')
-          echo "::error::ARM-EABI-GCC FILE TYPE: ${FILETYPE}"
-          LDCHECK=$(ldd "${RUNNER_TEMP}/toolchain/bin/arm-eabi-gcc" 2>&1 | tr '\n' '|')
-          echo "::error::LDD CHECK: ${LDCHECK}"
           echo "CROSS_COMPILE=${RUNNER_TEMP}/toolchain/bin/arm-eabi-" >> "$GITHUB_ENV"
 
       - name: Configure (lineage_hlte_pn547_defconfig)
