@@ -148,7 +148,20 @@ jobs:
       - name: Prepare kernel for external module build
         working-directory: kernel
         run: |
-          make O=out ARCH=arm modules_prepare
+          set -o pipefail
+          make O=out ARCH=arm modules_prepare 2>&1 | tee modules_prepare.log
+
+      - name: Dump modules_prepare log on failure
+        if: failure()
+        working-directory: kernel
+        run: |
+          python3 - <<'PYEOF'
+          with open("modules_prepare.log", "r", errors="replace") as f:
+              text = f.read()
+          text = text[-3800:]
+          text = text.replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+          print(f"::error::MODULES_PREPARE LOG:%0A{text}")
+          PYEOF
 
       - name: Fetch rtl8812au driver source (pinned commit)
         run: |
@@ -171,7 +184,10 @@ jobs:
         if: failure()
         run: |
           python3 - <<'PYEOF'
-          import re
+          import re, os
+          if not os.path.exists("module-build.log"):
+              print("::notice::module-build.log does not exist (failure happened before this step ran)")
+              raise SystemExit(0)
           with open("module-build.log", "r", errors="replace") as f:
               lines = f.readlines()
           err_re = re.compile(r'error:|Error \d|\*\*\* \[|undefined reference|No such file or directory|fatal error', re.IGNORECASE)
