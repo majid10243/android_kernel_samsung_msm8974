@@ -4616,3 +4616,11 @@ CONFIG_NLATTR=y
 # CONFIG_CORDIC is not set
 CONFIG_QMI_ENCDEC=y
 # CONFIG_QMI_ENCDEC_DEBUG is not set
+
+# Enabled to allow building/loading rtl8812au.ko as an external module
+# for Alfa AWUS036ACH (RTL8812AU chipset) support. This kernel's stock
+# defconfig has CONFIG_MODULES unset (no other drivers in this kernel
+# use loadable modules), so it must be turned on explicitly.
+CONFIG_MODULES=y
+CONFIG_MODULE_UNLOAD=y
+CONFIG_MODULE_FORCE_UNLOAD=y
