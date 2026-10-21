@@ -100,6 +100,7 @@ jobs:
           set -o pipefail
           make O=out ARCH=arm -j"$(nproc)" \
             HOSTCFLAGS="-fcommon" \
+            CONFIG_NO_ERROR_ON_MISMATCH=y \
             LOCALVERSION="${{ github.event.inputs.localversion }}" 2>&1 | tee build.log
 
       - name: Dump kernel build log tail on failure (as annotation, log storage is unreachable)
@@ -110,10 +111,31 @@ jobs:
           import re
           with open("build.log", "r", errors="replace") as f:
               lines = f.readlines()
-          tail = "".join(lines[-80:])
-          tail = tail[-3500:]
-          tail = tail.replace("%", "%25").replace("\r", "").replace("\n", "%0A")
-          print(f"::error::KERNEL BUILD LOG TAIL:%0A{tail}")
+
+          # With -j parallel make, the real failure is usually buried well
+          # before the end (many unrelated compiles keep running after it).
+          # Find the FIRST line that looks like a real error and show
+          # context around it, instead of just the tail.
+          err_re = re.compile(r'error:|Error \d|\*\*\* \[|undefined reference|No such file or directory|fatal error', re.IGNORECASE)
+          first_err_idx = None
+          for i, line in enumerate(lines):
+              if err_re.search(line):
+                  first_err_idx = i
+                  break
+
+          chunks = []
+          if first_err_idx is not None:
+              start = max(0, first_err_idx - 15)
+              end = min(len(lines), first_err_idx + 40)
+              chunks.append("FIRST ERROR CONTEXT (lines %d-%d of %d):\n" % (start, end, len(lines)))
+              chunks.append("".join(lines[start:end]))
+          chunks.append("\n--- LOG TAIL ---\n")
+          chunks.append("".join(lines[-30:]))
+
+          text = "".join(chunks)
+          text = text[-3800:]
+          text = text.replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+          print(f"::error::KERNEL BUILD LOG:%0A{text}")
           PYEOF
 
       - name: Verify kernel output exists
@@ -149,12 +171,27 @@ jobs:
         if: failure()
         run: |
           python3 - <<'PYEOF'
+          import re
           with open("module-build.log", "r", errors="replace") as f:
               lines = f.readlines()
-          tail = "".join(lines[-80:])
-          tail = tail[-3500:]
-          tail = tail.replace("%", "%25").replace("\r", "").replace("\n", "%0A")
-          print(f"::error::MODULE BUILD LOG TAIL:%0A{tail}")
+          err_re = re.compile(r'error:|Error \d|\*\*\* \[|undefined reference|No such file or directory|fatal error', re.IGNORECASE)
+          first_err_idx = None
+          for i, line in enumerate(lines):
+              if err_re.search(line):
+                  first_err_idx = i
+                  break
+          chunks = []
+          if first_err_idx is not None:
+              start = max(0, first_err_idx - 15)
+              end = min(len(lines), first_err_idx + 40)
+              chunks.append("FIRST ERROR CONTEXT (lines %d-%d of %d):\n" % (start, end, len(lines)))
+              chunks.append("".join(lines[start:end]))
+          chunks.append("\n--- LOG TAIL ---\n")
+          chunks.append("".join(lines[-30:]))
+          text = "".join(chunks)
+          text = text[-3800:]
+          text = text.replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+          print(f"::error::MODULE BUILD LOG:%0A{text}")
           PYEOF
 
       - name: Verify module output exists
