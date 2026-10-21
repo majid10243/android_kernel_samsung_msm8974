@@ -149,7 +149,7 @@ jobs:
         working-directory: kernel
         run: |
           set -o pipefail
-          make O=out ARCH=arm modules_prepare 2>&1 | tee modules_prepare.log
+          make O=out ARCH=arm HOSTCFLAGS="-fcommon" modules_prepare 2>&1 | tee modules_prepare.log
 
       - name: Dump modules_prepare log on failure
         if: failure()
