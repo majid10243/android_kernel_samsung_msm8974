@@ -32,7 +32,7 @@ on:
         default: "688f6ac5e412ecfa074d33d95e9c11202f301d95"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: nethunter-hlte-rtl8812au-build-${{ github.ref }}
@@ -275,24 +275,6 @@ jobs:
             kernel/build.log
             module-build.log
           retention-days: 14
-
-      # Artifact/log downloads are blocked in the author's environment, so also
-      # publish the binaries to an orphan branch that can be fetched with plain git.
-      - name: Publish binaries to build-artifacts branch (only on success)
-        if: success()
-        run: |
-          mkdir -p publish
-          cp kernel/out/arch/arm/boot/zImage publish/zImage
-          cp rtl8812au/8812au.ko publish/8812au.ko
-          cp build-info.txt publish/build-info.txt
-          cp kernel/.config publish/kernel.config 2>/dev/null || cp kernel/out/.config publish/kernel.config
-          cd publish
-          git init -q -b build-artifacts
-          git config user.email "actions@github.com"
-          git config user.name "github-actions"
-          git add -A
-          git commit -q -m "Build artifacts ${GITHUB_RUN_ID}"
-          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" HEAD:refs/heads/build-artifacts
 
       - name: Upload kernel + module artifacts (only on success)
         if: success()
