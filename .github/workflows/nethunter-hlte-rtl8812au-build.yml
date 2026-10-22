@@ -182,8 +182,11 @@ jobs:
           # kbuild finds nothing to build and "succeeds" with no .ko produced.
           # Also disable the default x86 platform block and use a minimal
           # ARM little-endian config (wext mode, no cfg80211 -> safest on 3.4).
+          # CC is overridden to bypass scripts/gcc-wrapper.py, which turns any
+          # non-whitelisted warning into a fatal error (this vendor driver has many).
           make -C "$KDIR" M="$GITHUB_WORKSPACE/rtl8812au" \
             ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
+            CC="${CROSS_COMPILE}gcc" \
             CONFIG_RTL8821AU=m \
             CONFIG_PLATFORM_I386_PC=n \
             USER_EXTRA_CFLAGS="-DCONFIG_LITTLE_ENDIAN" \
