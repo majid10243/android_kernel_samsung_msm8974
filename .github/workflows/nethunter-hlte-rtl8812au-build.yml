@@ -54,6 +54,9 @@ jobs:
       - name: Record build metadata
         working-directory: kernel
         run: |
+          # file-mode changes (chmod +x tools/dtbTool) must not append "-dirty" to the
+          # kernel release string; module vermagic has to equal the zImage's exactly.
+          git config core.fileMode false
           echo "KERNEL_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
 
@@ -180,7 +183,7 @@ jobs:
         working-directory: kernel
         run: |
           set -o pipefail
-          make O=out ARCH=arm HOSTCFLAGS="-fcommon" modules_prepare 2>&1 | tee modules_prepare.log
+          make O=out ARCH=arm HOSTCFLAGS="-fcommon" LOCALVERSION="${{ github.event.inputs.localversion }}" modules_prepare 2>&1 | tee modules_prepare.log
 
       - name: Dump modules_prepare log on failure
         if: failure()
@@ -218,6 +221,7 @@ jobs:
           make -C "$KDIR" M="$GITHUB_WORKSPACE/rtl8812au" \
             ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
             CC="${CROSS_COMPILE}gcc" \
+            LOCALVERSION="${{ github.event.inputs.localversion }}" \
             CONFIG_RTL8821AU=m \
             CONFIG_PLATFORM_I386_PC=n \
             USER_EXTRA_CFLAGS="-DCONFIG_LITTLE_ENDIAN" \
@@ -283,6 +287,32 @@ jobs:
           "${CROSS_COMPILE}strip" --strip-unneeded rtl8812au/8812au.ko
           file rtl8812au/8812au.ko
           ls -lh rtl8812au/8812au.ko
+
+      # insmod rejects a module whose vermagic differs from the running kernel's
+      # release string, so never ship a pair that doesn't match.
+      - name: Verify module vermagic matches zImage release string
+        run: |
+          python3 - <<'PYEOF'
+          import re, lzma, sys
+          z = open("kernel/out/arch/arm/boot/zImage", "rb").read()
+          kern = None
+          for m in re.finditer(rb"\xfd7zXZ\x00", z):
+              try:
+                  out = lzma.LZMADecompressor().decompress(z[m.start():])
+              except Exception:
+                  continue
+              v = re.search(rb"Linux version (\S+)", out)
+              if v:
+                  kern = v.group(1).decode(); break
+          mod = re.search(rb"vermagic=(\S+)", open("rtl8812au/8812au.ko", "rb").read())
+          mod = mod.group(1).decode() if mod else None
+          print("zImage release :", kern)
+          print("module vermagic:", mod)
+          if not kern or kern != mod:
+              print(f"::error::VERSION MISMATCH zImage={kern} module={mod}")
+              sys.exit(1)
+          print("OK: module vermagic matches kernel release")
+          PYEOF
 
       - name: Write build-info.txt
         if: always()
