@@ -176,9 +176,33 @@ jobs:
         run: |
           set -o pipefail
           KDIR="$GITHUB_WORKSPACE/kernel/out"
+          # The driver Makefile only defines obj-$(CONFIG_RTL8821AU) when invoked
+          # through its own outer "make" (which exports CONFIG_RTL8821AU=m).
+          # We call kbuild directly, so pass the symbol explicitly; otherwise
+          # kbuild finds nothing to build and "succeeds" with no .ko produced.
+          # Also disable the default x86 platform block and use a minimal
+          # ARM little-endian config (wext mode, no cfg80211 -> safest on 3.4).
           make -C "$KDIR" M="$GITHUB_WORKSPACE/rtl8812au" \
             ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
+            CONFIG_RTL8821AU=m \
+            CONFIG_PLATFORM_I386_PC=n \
+            USER_EXTRA_CFLAGS="-DCONFIG_LITTLE_ENDIAN" \
             modules 2>&1 | tee module-build.log
+
+      - name: Show module-build.log tail (always, for debugging)
+        if: always()
+        run: |
+          python3 - <<'PYEOF'
+          import os
+          if not os.path.exists("module-build.log"):
+              print("::notice::module-build.log missing")
+              raise SystemExit(0)
+          with open("module-build.log", "r", errors="replace") as f:
+              text = f.read()
+          text = text[-2500:]
+          text = text.replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+          print(f"::notice::MODULE BUILD LOG TAIL (always):%0A{text}")
+          PYEOF
 
       - name: Dump module build log tail on failure (as annotation, log storage is unreachable)
         if: failure()
@@ -209,6 +233,15 @@ jobs:
           text = text.replace("%", "%25").replace("\r", "").replace("\n", "%0A")
           print(f"::error::MODULE BUILD LOG:%0A{text}")
           PYEOF
+
+      - name: List rtl8812au build directory (always, for debugging)
+        if: always()
+        run: |
+          echo "::notice::rtl8812au dir listing:%0A$(find rtl8812au -maxdepth 1 -name '*.ko' -o -maxdepth 1 -name '*.o' -o -maxdepth 1 -name 'Module.symvers' -o -maxdepth 1 -name '.*.cmd' 2>/dev/null | tr '\n' ' ')"
+          find rtl8812au -maxdepth 1 -printf '%f\n' | sort | tr '\n' ' '
+          echo ""
+          ls -la rtl8812au/*.ko 2>&1 || true
+          ls -la rtl8812au/ | head -60
 
       - name: Verify module output exists
         run: |
