@@ -145,6 +145,18 @@ jobs:
           file out/arch/arm/boot/zImage
           ls -lh out/arch/arm/boot/zImage
 
+      # dtb.img (QCDT, page size 2048) is what the Samsung/Qualcomm bootloader selects a
+      # device tree from; build it from the same tree so zImage and DT always match.
+      - name: Build dtb.img
+        working-directory: kernel
+        run: |
+          set -o pipefail
+          sudo apt-get install -y --no-install-recommends libstdc++6:i386 libgcc-s1:i386 || true
+          make O=out ARCH=arm HOSTCFLAGS="-fcommon" dtbs 2>&1 | tee dtbs.log
+          find out/arch/arm/boot -name '*.dtb' | sort
+          ./tools/dtbTool -s 2048 -p out/scripts/dtc/ -o dtb.img out/arch/arm/boot/ 2>&1 | tee dtbtool.log
+          ls -l dtb.img
+
       - name: Prepare kernel for external module build
         working-directory: kernel
         run: |
@@ -285,6 +297,7 @@ jobs:
           cp kernel/out/arch/arm/boot/zImage publish/zImage
           cp rtl8812au/8812au.ko publish/8812au.ko
           cp build-info.txt publish/build-info.txt
+          cp kernel/dtb.img publish/dtb.img
           cp kernel/.config publish/kernel.config 2>/dev/null || cp kernel/out/.config publish/kernel.config
           cd publish
           git init -q -b build-artifacts
