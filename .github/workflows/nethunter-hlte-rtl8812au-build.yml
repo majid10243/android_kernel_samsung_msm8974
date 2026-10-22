@@ -151,11 +151,30 @@ jobs:
         working-directory: kernel
         run: |
           set -o pipefail
-          sudo apt-get install -y --no-install-recommends libstdc++6:i386 libgcc-s1:i386 || true
+          # tools/dtbTool is a 32-bit x86 ELF stored without the exec bit (exit 126 otherwise)
+          chmod +x tools/dtbTool
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libc6:i386 libstdc++6:i386 libgcc-s1:i386
           make O=out ARCH=arm HOSTCFLAGS="-fcommon" dtbs 2>&1 | tee dtbs.log
           find out/arch/arm/boot -name '*.dtb' | sort
           ./tools/dtbTool -s 2048 -p out/scripts/dtc/ -o dtb.img out/arch/arm/boot/ 2>&1 | tee dtbtool.log
           ls -l dtb.img
+
+      - name: Dump dtb build tail on failure
+        if: failure()
+        working-directory: kernel
+        run: |
+          python3 - <<'PYEOF'
+          import os
+          text = ""
+          for n in ("dtbs.log", "dtbtool.log"):
+              if os.path.exists(n):
+                  text += f"== {n} ==\n" + open(n, errors="replace").read()[-1800:] + "\n"
+          text = (text or "no dtb logs")[-3800:]
+          text = text.replace("%", "%25").replace("\r", "").replace("\n", "%0A")
+          print(f"::error::DTB LOG:%0A{text}")
+          PYEOF
 
       - name: Prepare kernel for external module build
         working-directory: kernel
