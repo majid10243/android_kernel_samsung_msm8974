@@ -93,6 +93,18 @@ jobs:
         run: |
           mkdir -p out
           make O=out ARCH=arm lineage_hlte_pn547_defconfig
+          # Extra Wi-Fi drivers as loadable modules (AWUS036H=RTL8187, RT73, RT2800USB).
+          # They sit on mac80211, which the stock config has disabled.
+          cat >> out/.config <<'CFGEOF'
+          CONFIG_MAC80211=m
+          CONFIG_RTL8187=m
+          CONFIG_RT2X00=m
+          CONFIG_RT73USB=m
+          CONFIG_RT2800USB=m
+          CFGEOF
+          sed -i 's/^          //' out/.config
+          yes "" | make O=out ARCH=arm oldconfig > oldconfig.log 2>&1 || true
+          grep -E "^CONFIG_(MAC80211|RTL8187|RT2X00|RT73USB|RT2800USB)=" out/.config
 
       - name: Build kernel
         working-directory: kernel
@@ -214,8 +226,8 @@ jobs:
           # through its own outer "make" (which exports CONFIG_RTL8821AU=m).
           # We call kbuild directly, so pass the symbol explicitly; otherwise
           # kbuild finds nothing to build and "succeeds" with no .ko produced.
-          # Also disable the default x86 platform block and use a minimal
-          # ARM little-endian config (wext mode, no cfg80211 -> safest on 3.4).
+          # Also disable the default x86 platform block and use ARM little-endian
+          # plus the cfg80211 interface (without it the netdev has NO wireless API at all).
           # CC is overridden to bypass scripts/gcc-wrapper.py, which turns any
           # non-whitelisted warning into a fatal error (this vendor driver has many).
           make -C "$KDIR" M="$GITHUB_WORKSPACE/rtl8812au" \
@@ -224,7 +236,7 @@ jobs:
             LOCALVERSION="${{ github.event.inputs.localversion }}" \
             CONFIG_RTL8821AU=m \
             CONFIG_PLATFORM_I386_PC=n \
-            USER_EXTRA_CFLAGS="-DCONFIG_LITTLE_ENDIAN" \
+            USER_EXTRA_CFLAGS="-DCONFIG_LITTLE_ENDIAN -DCONFIG_IOCTL_CFG80211 -DRTW_USE_CFG80211_STA_EVENT" \
             modules 2>&1 | tee module-build.log
 
       - name: Show module-build.log tail (always, for debugging)
@@ -304,14 +316,21 @@ jobs:
               v = re.search(rb"Linux version (\S+)", out)
               if v:
                   kern = v.group(1).decode(); break
-          mod = re.search(rb"vermagic=(\S+)", open("rtl8812au/8812au.ko", "rb").read())
-          mod = mod.group(1).decode() if mod else None
+          import glob
+          mods = ["rtl8812au/8812au.ko"] + sorted(glob.glob("kernel/out/**/*.ko", recursive=True))
           print("zImage release :", kern)
-          print("module vermagic:", mod)
-          if not kern or kern != mod:
-              print(f"::error::VERSION MISMATCH zImage={kern} module={mod}")
+          bad = False
+          for f in mods:
+              m = re.search(rb"vermagic=(\S+)", open(f, "rb").read())
+              m = m.group(1).decode() if m else None
+              ok = bool(kern) and kern == m
+              print(("OK   " if ok else "BAD  ") + f + "  " + str(m))
+              if not ok:
+                  bad = True
+          if bad or not kern:
+              print(f"::error::VERSION MISMATCH (zImage={kern}); see log")
               sys.exit(1)
-          print("OK: module vermagic matches kernel release")
+          print("OK: all module vermagics match kernel release")
           PYEOF
 
       - name: Write build-info.txt
@@ -345,6 +364,10 @@ jobs:
           mkdir -p publish
           cp kernel/out/arch/arm/boot/zImage publish/zImage
           cp rtl8812au/8812au.ko publish/8812au.ko
+          mkdir -p publish/modules
+          find kernel/out -name '*.ko' -exec cp {} publish/modules/ \;
+          "${CROSS_COMPILE}strip" --strip-unneeded publish/modules/*.ko || true
+          ls -l publish/modules > publish/modules-list.txt
           cp build-info.txt publish/build-info.txt
           cp kernel/dtb.img publish/dtb.img
           cp kernel/.config publish/kernel.config 2>/dev/null || cp kernel/out/.config publish/kernel.config
