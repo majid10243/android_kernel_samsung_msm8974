@@ -29,7 +29,7 @@ on:
       driver_ref:
         description: "Commit of DiegoGuidaF/rtl8812AU to build against"
         required: false
-        default: "688f6ac5e412ecfa074d33d95e9c11202f301d95"
+        default: "734485506a30d6237c2deaad666a19f8ca5379f2"  # aircrack-ng/rtl8812au v5.6.4.2
 
 permissions:
   contents: write
@@ -209,11 +209,16 @@ jobs:
           print(f"::error::MODULES_PREPARE LOG:%0A{text}")
           PYEOF
 
-      - name: Fetch rtl8812au driver source (pinned commit)
+      - name: Fetch rtl8812au driver source (pinned commit, aircrack-ng fork)
         run: |
+          # Switched from DiegoGuidaF/rtl8812AU (vendor 4.3.14, 2014) to the
+          # actively maintained aircrack-ng fork: the old driver's cfg80211
+          # glue silently ignores NL80211_CMD_SET_CHANNEL in monitor mode
+          # (verified on-device: insmod OK, RX OK, but "iw set channel"/
+          # "iw set freq" are no-ops and aireplay-ng --test gets 0 replies).
           git init rtl8812au
           cd rtl8812au
-          git remote add origin https://github.com/DiegoGuidaF/rtl8812AU.git
+          git remote add origin https://github.com/aircrack-ng/rtl8812au.git
           git fetch --depth 1 origin "${{ github.event.inputs.driver_ref }}"
           git checkout FETCH_HEAD
           echo "DRIVER_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
@@ -222,19 +227,19 @@ jobs:
         run: |
           set -o pipefail
           KDIR="$GITHUB_WORKSPACE/kernel/out"
-          # The driver Makefile only defines obj-$(CONFIG_RTL8821AU) when invoked
-          # through its own outer "make" (which exports CONFIG_RTL8821AU=m).
-          # We call kbuild directly, so pass the symbol explicitly; otherwise
-          # kbuild finds nothing to build and "succeeds" with no .ko produced.
-          # Also disable the default x86 platform block and use ARM little-endian
-          # plus the cfg80211 interface (without it the netdev has NO wireless API at all).
+          # obj-$(CONFIG_88XXAU) := $(MODULE_NAME).o in this driver's Makefile;
+          # MODULE_NAME resolves to "8812au" when CONFIG_RTL8812A=y (the
+          # Makefile's own default). We call kbuild directly, so pass
+          # CONFIG_88XXAU=m explicitly or kbuild finds nothing to build.
+          # Also disable the default x86 platform block and supply the ARM
+          # little-endian + cfg80211 flags that block would otherwise add.
           # CC is overridden to bypass scripts/gcc-wrapper.py, which turns any
           # non-whitelisted warning into a fatal error (this vendor driver has many).
           make -C "$KDIR" M="$GITHUB_WORKSPACE/rtl8812au" \
             ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
             CC="${CROSS_COMPILE}gcc" \
             LOCALVERSION="${{ github.event.inputs.localversion }}" \
-            CONFIG_RTL8821AU=m \
+            CONFIG_88XXAU=m \
             CONFIG_PLATFORM_I386_PC=n \
             USER_EXTRA_CFLAGS="-DCONFIG_LITTLE_ENDIAN -DCONFIG_IOCTL_CFG80211 -DRTW_USE_CFG80211_STA_EVENT" \
             modules 2>&1 | tee module-build.log
