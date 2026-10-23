@@ -223,6 +223,47 @@ jobs:
           git checkout FETCH_HEAD
           echo "DRIVER_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
+      - name: Add radiotap compat defines (kernel 3.4.113's net/ieee80211_radiotap.h
+          predates VHT/STBC radiotap fields; values below match upstream Linux's
+          current header / the public radiotap.org spec, just filling the gap)
+        run: |
+          cat > rtl8812au/include/radiotap_compat.h <<'HDREOF'
+          #ifndef __RADIOTAP_COMPAT_H
+          #define __RADIOTAP_COMPAT_H
+          #ifndef IEEE80211_RADIOTAP_MCS_HAVE_STBC
+          #define IEEE80211_RADIOTAP_MCS_HAVE_STBC       0x20
+          #endif
+          #ifndef IEEE80211_RADIOTAP_MCS_STBC_MASK
+          #define IEEE80211_RADIOTAP_MCS_STBC_MASK       0x60
+          #endif
+          #ifndef IEEE80211_RADIOTAP_MCS_STBC_SHIFT
+          #define IEEE80211_RADIOTAP_MCS_STBC_SHIFT      5
+          #endif
+          #ifndef IEEE80211_RADIOTAP_VHT
+          #define IEEE80211_RADIOTAP_VHT                 21
+          #endif
+          #ifndef IEEE80211_RADIOTAP_VHT_KNOWN_STBC
+          #define IEEE80211_RADIOTAP_VHT_KNOWN_STBC      0x0001
+          #endif
+          #ifndef IEEE80211_RADIOTAP_VHT_KNOWN_GI
+          #define IEEE80211_RADIOTAP_VHT_KNOWN_GI        0x0004
+          #endif
+          #ifndef IEEE80211_RADIOTAP_VHT_KNOWN_BANDWIDTH
+          #define IEEE80211_RADIOTAP_VHT_KNOWN_BANDWIDTH 0x0040
+          #endif
+          #ifndef IEEE80211_RADIOTAP_VHT_FLAG_STBC
+          #define IEEE80211_RADIOTAP_VHT_FLAG_STBC       0x01
+          #endif
+          #ifndef IEEE80211_RADIOTAP_VHT_FLAG_SGI
+          #define IEEE80211_RADIOTAP_VHT_FLAG_SGI        0x04
+          #endif
+          #ifndef IEEE80211_RADIOTAP_CODING_LDPC_USER0
+          #define IEEE80211_RADIOTAP_CODING_LDPC_USER0   0x01
+          #endif
+          #endif
+          HDREOF
+          sed -i 's/^          //' rtl8812au/include/radiotap_compat.h
+
       - name: Build rtl8812au.ko external module
         run: |
           set -o pipefail
@@ -241,7 +282,7 @@ jobs:
             LOCALVERSION="${{ github.event.inputs.localversion }}" \
             CONFIG_88XXAU=m \
             CONFIG_PLATFORM_I386_PC=n \
-            USER_EXTRA_CFLAGS="-DCONFIG_LITTLE_ENDIAN -DCONFIG_IOCTL_CFG80211 -DRTW_USE_CFG80211_STA_EVENT" \
+            USER_EXTRA_CFLAGS="-DCONFIG_LITTLE_ENDIAN -DCONFIG_IOCTL_CFG80211 -DRTW_USE_CFG80211_STA_EVENT -include $GITHUB_WORKSPACE/rtl8812au/include/radiotap_compat.h" \
             modules 2>&1 | tee module-build.log
 
       - name: Show module-build.log tail (always, for debugging)
