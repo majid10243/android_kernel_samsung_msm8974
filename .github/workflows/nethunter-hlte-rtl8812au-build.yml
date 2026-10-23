@@ -29,7 +29,7 @@ on:
       driver_ref:
         description: "Commit of DiegoGuidaF/rtl8812AU to build against"
         required: false
-        default: "734485506a30d6237c2deaad666a19f8ca5379f2"  # aircrack-ng/rtl8812au v5.6.4.2
+        default: "688f6ac5e412ecfa074d33d95e9c11202f301d95"
 
 permissions:
   contents: write
@@ -209,80 +209,77 @@ jobs:
           print(f"::error::MODULES_PREPARE LOG:%0A{text}")
           PYEOF
 
-      - name: Fetch rtl8812au driver source (pinned commit, aircrack-ng fork)
+      - name: Fetch rtl8812au driver source (pinned commit)
         run: |
-          # Switched from DiegoGuidaF/rtl8812AU (vendor 4.3.14, 2014) to the
-          # actively maintained aircrack-ng fork: the old driver's cfg80211
-          # glue silently ignores NL80211_CMD_SET_CHANNEL in monitor mode
-          # (verified on-device: insmod OK, RX OK, but "iw set channel"/
-          # "iw set freq" are no-ops and aireplay-ng --test gets 0 replies).
+          # Back on DiegoGuidaF/rtl8812AU (vendor 4.3.14): the aircrack-ng
+          # fork needs cfg80211 structs this 3.4.113 kernel doesn't have at
+          # all (cfg80211_chan_def/NL80211_CHAN_WIDTH_80P80 - added ~2014+),
+          # a dead end. Debugging the ORIGINAL driver's channel-set path
+          # instead (see patch step below): it logically looks correct
+          # (reaches set_channel_bwmode -> rtw_hal_set_chnl_bw -> HW), so
+          # add unconditional printk probes to see where it actually goes
+          # on-device, since the driver's own DBG_871X macro is a silent
+          # no-op unless built with -DCONFIG_DEBUG.
           git init rtl8812au
           cd rtl8812au
-          git remote add origin https://github.com/aircrack-ng/rtl8812au.git
+          git remote add origin https://github.com/DiegoGuidaF/rtl8812AU.git
           git fetch --depth 1 origin "${{ github.event.inputs.driver_ref }}"
           git checkout FETCH_HEAD
           echo "DRIVER_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
-      - name: Add radiotap compat defines (kernel 3.4.113's net/ieee80211_radiotap.h
-          predates VHT/STBC radiotap fields; values below match upstream Linux's
-          current header / the public radiotap.org spec, just filling the gap)
+
+      - name: Patch in unconditional channel-set debug probes
         run: |
-          cat > rtl8812au/include/radiotap_compat.h <<'HDREOF'
-          #ifndef __RADIOTAP_COMPAT_H
-          #define __RADIOTAP_COMPAT_H
-          #ifndef IEEE80211_RADIOTAP_MCS_HAVE_STBC
-          #define IEEE80211_RADIOTAP_MCS_HAVE_STBC       0x20
-          #endif
-          #ifndef IEEE80211_RADIOTAP_MCS_STBC_MASK
-          #define IEEE80211_RADIOTAP_MCS_STBC_MASK       0x60
-          #endif
-          #ifndef IEEE80211_RADIOTAP_MCS_STBC_SHIFT
-          #define IEEE80211_RADIOTAP_MCS_STBC_SHIFT      5
-          #endif
-          #ifndef IEEE80211_RADIOTAP_VHT
-          #define IEEE80211_RADIOTAP_VHT                 21
-          #endif
-          #ifndef IEEE80211_RADIOTAP_VHT_KNOWN_STBC
-          #define IEEE80211_RADIOTAP_VHT_KNOWN_STBC      0x0001
-          #endif
-          #ifndef IEEE80211_RADIOTAP_VHT_KNOWN_GI
-          #define IEEE80211_RADIOTAP_VHT_KNOWN_GI        0x0004
-          #endif
-          #ifndef IEEE80211_RADIOTAP_VHT_KNOWN_BANDWIDTH
-          #define IEEE80211_RADIOTAP_VHT_KNOWN_BANDWIDTH 0x0040
-          #endif
-          #ifndef IEEE80211_RADIOTAP_VHT_FLAG_STBC
-          #define IEEE80211_RADIOTAP_VHT_FLAG_STBC       0x01
-          #endif
-          #ifndef IEEE80211_RADIOTAP_VHT_FLAG_SGI
-          #define IEEE80211_RADIOTAP_VHT_FLAG_SGI        0x04
-          #endif
-          #ifndef IEEE80211_RADIOTAP_CODING_LDPC_USER0
-          #define IEEE80211_RADIOTAP_CODING_LDPC_USER0   0x01
-          #endif
-          #endif
-          HDREOF
-          sed -i 's/^          //' rtl8812au/include/radiotap_compat.h
+          python3 - <<'PYEOF2'
+          import re
+          p = "rtl8812au/os_dep/linux/ioctl_cfg80211.c"
+          s = open(p).read()
+          old = "	int chan_target = (u8) ieee80211_frequency_to_channel(chan->center_freq);"
+          new = ('	int chan_target = (u8) ieee80211_frequency_to_channel(chan->center_freq);\n'
+                 '	printk(KERN_ERR "CHDBG: cfg80211_rtw_set_channel called, target_ch=%d type=%d\\n", chan_target, channel_type);')
+          assert old in s, "probe 1 anchor not found"
+          s = s.replace(old, new, 1)
+          open(p, "w").write(s)
+
+          p = "rtl8812au/hal/rtl8812a/rtl8812a_phycfg.c"
+          s = open(p).read()
+          old = "	if(pHalData->bSwChnl)\n	{\n		pHalData->CurrentChannel=ChannelNum;\n		pHalData->CurrentCenterFrequencyIndex1 = ChannelNum;\n	}"
+          new = ('	printk(KERN_ERR "CHDBG: Handle ch=%d bSwitch=%d bSetBW=%d bSwChnl=%d bSetChnlBW=%d stopped=%d removed=%d\\n",'
+                 ' ChannelNum, bSwitchChannel, bSetBandWidth, pHalData->bSwChnl, pHalData->bSetChnlBW,'
+                 ' pDefAdapter->bDriverStopped, pDefAdapter->bSurpriseRemoved);\n'
+                 + old)
+          assert old in s, "probe 2 anchor not found"
+          s = s.replace(old, new, 1)
+          open(p, "w").write(s)
+
+          p = "rtl8812au/core/rtw_wlan_util.c"
+          s = open(p).read()
+          old = "	rtw_hal_set_chnl_bw(padapter, center_ch, bwmode, channel_offset, chnl_offset80); // set center channel"
+          new = ('	printk(KERN_ERR "CHDBG: set_channel_bwmode ch=%d center_ch=%d offset=%d bw=%d\\n", channel, center_ch, channel_offset, bwmode);\n'
+                 + old)
+          assert old in s, "probe 3 anchor not found"
+          s = s.replace(old, new, 1)
+          open(p, "w").write(s)
+          print("patched 3 probes OK")
+          PYEOF2
 
       - name: Build rtl8812au.ko external module
         run: |
           set -o pipefail
           KDIR="$GITHUB_WORKSPACE/kernel/out"
-          # obj-$(CONFIG_88XXAU) := $(MODULE_NAME).o in this driver's Makefile;
-          # MODULE_NAME resolves to "8812au" when CONFIG_RTL8812A=y (the
-          # Makefile's own default). We call kbuild directly, so pass
-          # CONFIG_88XXAU=m explicitly or kbuild finds nothing to build.
-          # Also disable the default x86 platform block and supply the ARM
-          # little-endian + cfg80211 flags that block would otherwise add.
+          # The driver Makefile only defines obj-$(CONFIG_RTL8821AU) when invoked
+          # through its own outer "make" (which exports CONFIG_RTL8821AU=m).
+          # We call kbuild directly, so pass the symbol explicitly; otherwise
+          # kbuild finds nothing to build and "succeeds" with no .ko produced.
           # CC is overridden to bypass scripts/gcc-wrapper.py, which turns any
           # non-whitelisted warning into a fatal error (this vendor driver has many).
           make -C "$KDIR" M="$GITHUB_WORKSPACE/rtl8812au" \
             ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
             CC="${CROSS_COMPILE}gcc" \
             LOCALVERSION="${{ github.event.inputs.localversion }}" \
-            CONFIG_88XXAU=m \
+            CONFIG_RTL8821AU=m \
             CONFIG_PLATFORM_I386_PC=n \
-            USER_EXTRA_CFLAGS="-DCONFIG_LITTLE_ENDIAN -DCONFIG_IOCTL_CFG80211 -DRTW_USE_CFG80211_STA_EVENT -include $GITHUB_WORKSPACE/rtl8812au/include/radiotap_compat.h" \
+            USER_EXTRA_CFLAGS="-DCONFIG_LITTLE_ENDIAN -DCONFIG_IOCTL_CFG80211 -DRTW_USE_CFG80211_STA_EVENT" \
             modules 2>&1 | tee module-build.log
 
       - name: Show module-build.log tail (always, for debugging)
