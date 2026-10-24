@@ -289,6 +289,20 @@ jobs:
           print("patched radiotap-len check OK")
           PYEOF3
 
+      - name: Fix TX power reporting stubs (get_tx_power was hardcoded to 12)
+        # cfg80211_rtw_get_txpower() always returned a hardcoded 12, and the
+        # HAL function it should delegate to (PHY_GetTxPowerLevel8812) is
+        # "#if 0"-disabled dead code in the vendor source, referencing a
+        # struct (Adapter->MgntInfo) that does not exist in this codebase -
+        # it was never finished upstream. set_tx_power is left alone as a
+        # genuine no-op: writing raw per-rate calibration indices without an
+        # RF meter risks an incorrect/unsafe value with no way here to
+        # verify it. See .github/scripts/patch_txpower.py for exactly what
+        # this changes and why (reports the real per-rate calibration index
+        # the driver already computes and programs for the current channel,
+        # labeled as an estimate, not a verified dBm figure).
+        run: python3 .github/scripts/patch_txpower.py
+
       - name: Build rtl8812au.ko external module
         run: |
           set -o pipefail
