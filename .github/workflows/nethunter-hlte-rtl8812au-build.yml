@@ -301,7 +301,16 @@ jobs:
         # this changes and why (reports the real per-rate calibration index
         # the driver already computes and programs for the current channel,
         # labeled as an estimate, not a verified dBm figure).
-        run: python3 .github/scripts/patch_txpower.py
+        run: |
+          set +e
+          python3 kernel/.github/scripts/patch_txpower.py > patch_txpower.log 2>&1
+          rc=$?
+          cat patch_txpower.log
+          if [ $rc -ne 0 ]; then
+            TXT=$(tail -c 3000 patch_txpower.log | python3 -c "import sys; t=sys.stdin.read().replace(chr(37),'%25').replace(chr(13),'').replace(chr(10),'%0A'); print(t)")
+            echo "::error::PATCH_TXPOWER FAILED rc=$rc :%0A$TXT"
+            exit 1
+          fi
 
       - name: Build rtl8812au.ko external module
         run: |
