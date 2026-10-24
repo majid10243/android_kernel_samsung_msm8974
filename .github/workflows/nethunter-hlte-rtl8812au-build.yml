@@ -263,6 +263,32 @@ jobs:
           print("patched 3 probes OK")
           PYEOF2
 
+      - name: Fix monitor TX radiotap length check (real injection bug)
+        # The driver drops every injected packet whose radiotap header isn't
+        # exactly 14 bytes. aireplay-ng/aircrack-ng build their own radiotap
+        # header with a different length, so every injected frame was
+        # silently dropped before transmission - this, not channel-set, is
+        # the actual injection bug (confirmed via the CHDBG probes above:
+        # channel-set correctly reaches hardware). rtap_len is already the
+        # real, correctly parsed header length from the kernel's own
+        # ieee80211_get_radiotap_len(), already bounds-checked against
+        # skb->len two lines earlier, so the fixed-14 check is just removed.
+        run: |
+          python3 - <<'PYEOF3'
+          p = "rtl8812au/os_dep/linux/ioctl_cfg80211.c"
+          s = open(p).read()
+          old = ('	if(rtap_len != 14)\n'
+                 '	{\n'
+                 '		DBG_8192C("radiotap len (should be 14): %d\\n", rtap_len);\n'
+                 '		goto fail;\n'
+                 '	}	\n')
+          new = '	printk(KERN_ERR "CHDBG: monitor TX rtap_len=%d (was hard-rejected unless ==14)\\n", rtap_len);\n'
+          assert old in s, "radiotap-len anchor not found"
+          s = s.replace(old, new, 1)
+          open(p, "w").write(s)
+          print("patched radiotap-len check OK")
+          PYEOF3
+
       - name: Build rtl8812au.ko external module
         run: |
           set -o pipefail
