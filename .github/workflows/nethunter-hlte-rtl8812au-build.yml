@@ -93,14 +93,18 @@ jobs:
         run: |
           mkdir -p out
           make O=out ARCH=arm lineage_hlte_pn547_defconfig
-          # Extra Wi-Fi drivers as loadable modules (AWUS036H=RTL8187, RT73, RT2800USB).
-          # They sit on mac80211, which the stock config has disabled.
+          # Extra Wi-Fi drivers built STATICALLY INTO zImage (AWUS036H=RTL8187,
+          # RT73, RT2800USB) instead of as loadable .ko modules: this is the
+          # "plug in and it just works, no insmod/loadwifi step" behavior the
+          # user's older hand-built kernel had (that zip shipped zero .ko
+          # files and do.modules=0 - everything was compiled in). We copy
+          # that property here for the in-tree drivers.
           cat >> out/.config <<'CFGEOF'
-          CONFIG_MAC80211=m
-          CONFIG_RTL8187=m
-          CONFIG_RT2X00=m
-          CONFIG_RT73USB=m
-          CONFIG_RT2800USB=m
+          CONFIG_MAC80211=y
+          CONFIG_RTL8187=y
+          CONFIG_RT2X00=y
+          CONFIG_RT73USB=y
+          CONFIG_RT2800USB=y
           CFGEOF
           sed -i 's/^          //' out/.config
           yes "" | make O=out ARCH=arm oldconfig > oldconfig.log 2>&1 || true
