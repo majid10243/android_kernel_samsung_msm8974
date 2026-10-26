@@ -386,6 +386,105 @@ jobs:
           print("patched radiotap-len check + full entry/early-exit/branch tracing OK")
           PYEOF3
 
+      - name: Fix monitor TX to accept all management frames, not just Action
+        # Root cause of the actual 0% injection (confirmed via the tracing
+        # above): "aireplay-ng --test" injects 802.11 Probe Request frames
+        # (frame_ctl=0x40 observed in dmesg) and deauth attacks inject
+        # Deauthentication frames - both are MGMT-type but NOT Action-type,
+        # and the driver's monitor TX path only ever handled MGMT+ACTION,
+        # silently dropping every other management subtype in the else
+        # branch. The action-specific code (rtw_action_frame_parse,
+        # P2P/WFD handling) only applies to real Action frames; the actual
+        # "copy raw frame into a tx buffer and dump_mgntframe() it" part
+        # underneath is completely generic and needs no subtype-specific
+        # data, so it's safe to route every management subtype through it.
+        run: |
+          python3 - <<'PYEOF4'
+          p = "rtl8812au/os_dep/linux/ioctl_cfg80211.c"
+          s = open(p).read()
+
+          old = ('	else if ((frame_ctl & (RTW_IEEE80211_FCTL_FTYPE|RTW_IEEE80211_FCTL_STYPE))\n'
+                 '		== (RTW_IEEE80211_FTYPE_MGMT|RTW_IEEE80211_STYPE_ACTION)\n'
+                 '	) \n'
+                 '	{\n'
+                 '		//only for action frames\n'
+                 '		struct xmit_frame		*pmgntframe;\n'
+                 '		struct pkt_attrib	*pattrib;\n'
+                 '		unsigned char	*pframe;	\n'
+                 '		//u8 category, action, OUI_Subtype, dialogToken=0;\n'
+                 '		//unsigned char	*frame_body;\n'
+                 '		struct rtw_ieee80211_hdr *pwlanhdr;	\n'
+                 '		struct xmit_priv	*pxmitpriv = &(padapter->xmitpriv);\n'
+                 '		struct mlme_ext_priv	*pmlmeext = &(padapter->mlmeextpriv);\n'
+                 '		u8 *buf = skb->data;\n'
+                 '		u32 len = skb->len;\n'
+                 '		u8 category, action;\n'
+                 '		int type = -1;\n'
+                 '\n'
+                 '		if (rtw_action_frame_parse(buf, len, &category, &action) == _FALSE) {\n'
+                 '			DBG_8192C(FUNC_NDEV_FMT" frame_control:0x%x\\n", FUNC_NDEV_ARG(ndev),\n'
+                 '				le16_to_cpu(((struct rtw_ieee80211_hdr_3addr *)buf)->frame_ctl));\n'
+                 '			goto fail;\n'
+                 '		}\n'
+                 '		\n'
+                 '		DBG_8192C("RTW_Tx:da="MAC_FMT" via "FUNC_NDEV_FMT"\\n",\n'
+                 '			MAC_ARG(GetAddr1Ptr(buf)), FUNC_NDEV_ARG(ndev));\n'
+                 '		#ifdef CONFIG_P2P\n'
+                 '		if((type = rtw_p2p_check_frames(padapter, buf, len, _TRUE)) >= 0)\n'
+                 '			goto dump;\n'
+                 '		#endif\n'
+                 '		if (category == RTW_WLAN_CATEGORY_PUBLIC)\n'
+                 '			DBG_871X("RTW_Tx:%s\\n", action_public_str(action));\n'
+                 '		else\n'
+                 '			DBG_871X("RTW_Tx:category(%u), action(%u)\\n", category, action);\n'
+                 '\n'
+                 'dump:\n')
+
+          new = ('	else if ((frame_ctl & RTW_IEEE80211_FCTL_FTYPE) == RTW_IEEE80211_FTYPE_MGMT)\n'
+                 '	{\n'
+                 '		struct xmit_frame		*pmgntframe;\n'
+                 '		struct pkt_attrib	*pattrib;\n'
+                 '		unsigned char	*pframe;	\n'
+                 '		struct rtw_ieee80211_hdr *pwlanhdr;	\n'
+                 '		struct xmit_priv	*pxmitpriv = &(padapter->xmitpriv);\n'
+                 '		struct mlme_ext_priv	*pmlmeext = &(padapter->mlmeextpriv);\n'
+                 '		u8 *buf = skb->data;\n'
+                 '		u32 len = skb->len;\n'
+                 '		u8 category, action;\n'
+                 '		int type = -1;\n'
+                 '		u16 mgmt_stype = frame_ctl & RTW_IEEE80211_FCTL_STYPE;\n'
+                 '\n'
+                 '		if (mgmt_stype == RTW_IEEE80211_STYPE_ACTION) {\n'
+                 '			if (rtw_action_frame_parse(buf, len, &category, &action) == _FALSE) {\n'
+                 '				DBG_8192C(FUNC_NDEV_FMT" frame_control:0x%x\\n", FUNC_NDEV_ARG(ndev),\n'
+                 '					le16_to_cpu(((struct rtw_ieee80211_hdr_3addr *)buf)->frame_ctl));\n'
+                 '				goto fail;\n'
+                 '			}\n'
+                 '\n'
+                 '			DBG_8192C("RTW_Tx:da="MAC_FMT" via "FUNC_NDEV_FMT"\\n",\n'
+                 '				MAC_ARG(GetAddr1Ptr(buf)), FUNC_NDEV_ARG(ndev));\n'
+                 '			#ifdef CONFIG_P2P\n'
+                 '			if((type = rtw_p2p_check_frames(padapter, buf, len, _TRUE)) >= 0)\n'
+                 '				goto dump;\n'
+                 '			#endif\n'
+                 '			if (category == RTW_WLAN_CATEGORY_PUBLIC)\n'
+                 '				DBG_871X("RTW_Tx:%s\\n", action_public_str(action));\n'
+                 '			else\n'
+                 '				DBG_871X("RTW_Tx:category(%u), action(%u)\\n", category, action);\n'
+                 '		} else {\n'
+                 '			printk(KERN_ERR "CHDBG: monitor xmit non-action MGMT subtype=0x%x pktlen=%d (injected)\\n",\n'
+                 '				mgmt_stype, len);\n'
+                 '		}\n'
+                 '\n'
+                 'dump:\n')
+
+          assert old in s, "mgmt-branch anchor not found"
+          assert s.count(old) == 1, "mgmt-branch anchor not unique"
+          s = s.replace(old, new, 1)
+          open(p, "w").write(s)
+          print("patched monitor TX to accept all management frame subtypes OK")
+          PYEOF4
+
       - name: Fix TX power reporting stubs (get_tx_power was hardcoded to 12)
         # cfg80211_rtw_get_txpower() always returned a hardcoded 12, and the
         # HAL function it should delegate to (PHY_GetTxPowerLevel8812) is

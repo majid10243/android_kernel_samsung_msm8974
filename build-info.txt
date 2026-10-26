@@ -1,0 +1,7 @@
+kernel_commit: 8a435f047b377c35351e3982a99aa44bd1524423
+kernel_ref: cm-14.1
+driver_commit: 688f6ac5e412ecfa074d33d95e9c11202f301d95
+build_date: 2026-10-26T04:32:06Z
+defconfig: lineage_hlte_pn547_defconfig
+cross_compile: arm-eabi-4.7
+localversion: -NetHunter-hlte-rtl8812au
