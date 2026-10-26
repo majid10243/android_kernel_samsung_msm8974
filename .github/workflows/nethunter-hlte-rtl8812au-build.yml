@@ -485,6 +485,75 @@ jobs:
           print("patched monitor TX to accept all management frame subtypes OK")
           PYEOF4
 
+      - name: Fix "iw dev wlan1 set type monitor" to actually work in place
+        # Switching an EXISTING interface's type to monitor only flipped a
+        # mode flag (rtw_wdev->iftype) and the ndev->type field; it never
+        # swapped netdev_ops, so wlan1 kept using the normal station TX path
+        # instead of rtw_cfg80211_monitor_if_ops (ndo_start_xmit =
+        # rtw_cfg80211_monitor_if_xmit_entry) - the special path that
+        # understands raw 802.11 + radiotap frames. That ops swap only ever
+        # happened for a BRAND NEW virtual interface added as monitor type
+        # (rtw_cfg80211_add_monitor_if, via "iw phy <phy> interface add
+        # <name> type monitor"), confirmed by testing: switching wlan1 in
+        # place never triggered any of the monitor-TX CHDBG tracing added
+        # above, while a separate "mon1" interface did. Make the in-place
+        # switch do the same thing a new monitor interface does, so
+        # wlan1 itself works directly without needing a second interface.
+        run: |
+          python3 - <<'PYEOF5'
+          p1 = "rtl8812au/os_dep/linux/os_intfs.c"
+          s1 = open(p1).read()
+          old1 = "static const struct net_device_ops rtw_netdev_ops = {"
+          assert s1.count(old1) == 1, "rtw_netdev_ops anchor not found/unique"
+          s1 = s1.replace(
+              old1,
+              "// made non-static so cfg80211_rtw_change_iface() can switch back to it\n"
+              "const struct net_device_ops rtw_netdev_ops = {",
+              1,
+          )
+          open(p1, "w").write(s1)
+
+          p2 = "rtl8812au/os_dep/linux/ioctl_cfg80211.c"
+          s2 = open(p2).read()
+
+          old2 = "#include <rtw_wifi_regd.h>\n"
+          assert s2.count(old2) == 1, "include anchor not found/unique"
+          new2 = (
+              old2
+              + "\n"
+              + "// Forward declarations so cfg80211_rtw_change_iface() can swap\n"
+              + "// netdev_ops in place when switching an EXISTING interface to/from\n"
+              + "// monitor type (see the patch below).\n"
+              + 'extern const struct net_device_ops rtw_netdev_ops;\n'
+              + 'static const struct net_device_ops rtw_cfg80211_monitor_if_ops;\n'
+          )
+          s2 = s2.replace(old2, new2, 1)
+
+          old3 = (
+              '	rtw_wdev->iftype = type;\n'
+              '	\n'
+              '	if (rtw_set_802_11_infrastructure_mode(padapter, networkType) ==_FALSE)\n'
+          )
+          assert s2.count(old3) == 1, "iftype-assign anchor not found/unique"
+          new3 = (
+              '	// Actually route packets through the monitor TX path when switching\n'
+              '	// THIS interface to monitor type, instead of only when a brand new\n'
+              '	// virtual interface is added as monitor (rtw_cfg80211_add_monitor_if).\n'
+              '	// Switch back to the normal station ops when leaving monitor type.\n'
+              '	if (type == NL80211_IFTYPE_MONITOR)\n'
+              '		ndev->netdev_ops = &rtw_cfg80211_monitor_if_ops;\n'
+              '	else if (old_type == NL80211_IFTYPE_MONITOR)\n'
+              '		ndev->netdev_ops = &rtw_netdev_ops;\n'
+              '\n'
+              '	rtw_wdev->iftype = type;\n'
+              '	\n'
+              '	if (rtw_set_802_11_infrastructure_mode(padapter, networkType) ==_FALSE)\n'
+          )
+          s2 = s2.replace(old3, new3, 1)
+          open(p2, "w").write(s2)
+          print("patched in-place monitor-mode netdev_ops swap OK")
+          PYEOF5
+
       - name: Fix TX power reporting stubs (get_tx_power was hardcoded to 12)
         # cfg80211_rtw_get_txpower() always returned a hardcoded 12, and the
         # HAL function it should delegate to (PHY_GetTxPowerLevel8812) is
