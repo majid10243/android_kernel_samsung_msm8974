@@ -281,6 +281,7 @@ jobs:
           python3 - <<'PYEOF3'
           p = "rtl8812au/os_dep/linux/ioctl_cfg80211.c"
           s = open(p).read()
+
           old = ('	if(rtap_len != 14)\n'
                  '	{\n'
                  '		DBG_8192C("radiotap len (should be 14): %d\\n", rtap_len);\n'
@@ -289,8 +290,100 @@ jobs:
           new = '	printk(KERN_ERR "CHDBG: monitor TX rtap_len=%d (was hard-rejected unless ==14)\\n", rtap_len);\n'
           assert old in s, "radiotap-len anchor not found"
           s = s.replace(old, new, 1)
+
+          # The three earlier "goto fail" checks have NO logging at all, so
+          # if aireplay-ng's packets are being dropped before even reaching
+          # the rtap_len line above (no "monitor TX rtap_len=" seen in dmesg
+          # during a real injection test), we can't tell which of these three
+          # is the real culprit. Instrument function entry and each one.
+          # DBG_871X(FUNC_NDEV_FMT...) alone is NOT unique (used in ~17 other
+          # functions in this file) - anchor on the unique declarations right
+          # above it in THIS function instead, or we'd silently patch the
+          # wrong function.
+          old2 = ('	struct ieee80211_radiotap_header *rtap_hdr;\n'
+                  '	_adapter *padapter = (_adapter *)rtw_netdev_priv(ndev);\n'
+                  '	\n'
+                  '	DBG_871X(FUNC_NDEV_FMT"\\n", FUNC_NDEV_ARG(ndev));\n')
+          assert old2 in s, "entry anchor not found"
+          assert s.count(old2) == 1, "entry anchor not unique"
+          s = s.replace(
+              old2,
+              old2 + '	printk(KERN_ERR "CHDBG: monitor xmit ENTRY skb_len=%d\\n", skb ? skb->len : -1);\n',
+              1,
+          )
+
+          old3 = ('	if (unlikely(skb->len < sizeof(struct ieee80211_radiotap_header)))\n'
+                  '		goto fail;\n')
+          assert old3 in s, "len-check anchor not found"
+          s = s.replace(
+              old3,
+              '	if (unlikely(skb->len < sizeof(struct ieee80211_radiotap_header))) {\n'
+              '		printk(KERN_ERR "CHDBG: monitor xmit FAIL too-short skb_len=%d need>=%d\\n",\n'
+              '			skb->len, (int)sizeof(struct ieee80211_radiotap_header));\n'
+              '		goto fail;\n'
+              '	}\n',
+              1,
+          )
+
+          old4 = ('	rtap_hdr = (struct ieee80211_radiotap_header *)skb->data;\n'
+                  '	if (unlikely(rtap_hdr->it_version))\n'
+                  '		goto fail;\n')
+          assert old4 in s, "it_version anchor not found"
+          s = s.replace(
+              old4,
+              '	rtap_hdr = (struct ieee80211_radiotap_header *)skb->data;\n'
+              '	if (unlikely(rtap_hdr->it_version)) {\n'
+              '		printk(KERN_ERR "CHDBG: monitor xmit FAIL it_version=%d (want 0)\\n",\n'
+              '			rtap_hdr->it_version);\n'
+              '		goto fail;\n'
+              '	}\n',
+              1,
+          )
+
+          old5 = ('	rtap_len = ieee80211_get_radiotap_len(skb->data);\n'
+                  '	if (unlikely(skb->len < rtap_len))\n'
+                  '		goto fail;\n')
+          assert old5 in s, "rtap_len-bounds anchor not found"
+          s = s.replace(
+              old5,
+              '	rtap_len = ieee80211_get_radiotap_len(skb->data);\n'
+              '	if (unlikely(skb->len < rtap_len)) {\n'
+              '		printk(KERN_ERR "CHDBG: monitor xmit FAIL skb_len=%d < rtap_len=%d\\n",\n'
+              '			skb->len, rtap_len);\n'
+              '		goto fail;\n'
+              '	}\n',
+              1,
+          )
+
+          # Trace which branch the frame takes after the radiotap header is
+          # stripped: DATA (goes out via _rtw_xmit_entry - what aireplay-ng
+          # injection should hit), MGMT/ACTION (different path), or the
+          # silent "frame_ctl=0x%x" else-branch that just frees the skb and
+          # returns 0 with ZERO visible logging today (DBG_8192C is a no-op).
+          old6 = '\t\tret = _rtw_xmit_entry(skb, padapter->pnetdev);\n\n\t\treturn ret;\n'
+          assert old6 in s, "xmit-entry anchor not found"
+          s = s.replace(
+              old6,
+              '\t\tprintk(KERN_ERR "CHDBG: monitor xmit DATA frame -> _rtw_xmit_entry, pktlen=%d\\n", skb->len);\n'
+              '\t\tret = _rtw_xmit_entry(skb, padapter->pnetdev);\n'
+              '\t\tprintk(KERN_ERR "CHDBG: monitor xmit _rtw_xmit_entry returned %d\\n", ret);\n\n'
+              '\t\treturn ret;\n',
+              1,
+          )
+
+          old7 = '\telse\n\t{\n\t\tDBG_8192C("frame_ctl=0x%x\\n", frame_ctl & (RTW_IEEE80211_FCTL_FTYPE|RTW_IEEE80211_FCTL_STYPE));\n\t}\n'
+          assert old7 in s, "else-branch anchor not found"
+          s = s.replace(
+              old7,
+              '\telse\n\t{\n'
+              '\t\tprintk(KERN_ERR "CHDBG: monitor xmit DROPPED (not DATA, not MGMT/ACTION) frame_ctl=0x%x\\n",\n'
+              '\t\t\tframe_ctl & (RTW_IEEE80211_FCTL_FTYPE|RTW_IEEE80211_FCTL_STYPE));\n'
+              '\t}\n',
+              1,
+          )
+
           open(p, "w").write(s)
-          print("patched radiotap-len check OK")
+          print("patched radiotap-len check + full entry/early-exit/branch tracing OK")
           PYEOF3
 
       - name: Fix TX power reporting stubs (get_tx_power was hardcoded to 12)
