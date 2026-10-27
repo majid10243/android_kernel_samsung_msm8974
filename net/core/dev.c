@@ -2188,6 +2188,10 @@ int dev_hard_start_xmit(struct sk_buff *skb, struct net_device *dev,
 	int rc = NETDEV_TX_OK;
 	unsigned int skb_len;
 
+	if (dev && !strcmp(dev->name, "wlan1"))
+		printk(KERN_ERR "CHDBG: dev_hard_start_xmit ENTRY dev=wlan1 ops=%p ndo_start_xmit=%pS\n",
+			ops, ops ? ops->ndo_start_xmit : NULL);
+
 	if (likely(!skb->next)) {
 		netdev_features_t features;
 
@@ -2426,7 +2430,14 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 		spin_lock(&q->busylock);
 
 	spin_lock(root_lock);
+	if (dev && !strcmp(dev->name, "wlan1"))
+		printk(KERN_ERR "CHDBG: __dev_xmit_skb ENTRY dev=wlan1 q=%p q_state=0x%lx q_flags=0x%x deactivated=%d enqueue=%pS\n",
+			q, q->state, q->flags,
+			test_bit(__QDISC_STATE_DEACTIVATED, &q->state),
+			q->enqueue);
 	if (unlikely(test_bit(__QDISC_STATE_DEACTIVATED, &q->state))) {
+		if (dev && !strcmp(dev->name, "wlan1"))
+			printk(KERN_ERR "CHDBG: __dev_xmit_skb DROPPED dev=wlan1 (qdisc deactivated)\n");
 		kfree_skb(skb);
 		rc = NET_XMIT_DROP;
 	} else if ((q->flags & TCQ_F_CAN_BYPASS) && !qdisc_qlen(q) &&
@@ -2514,6 +2525,10 @@ int dev_queue_xmit(struct sk_buff *skb)
 	struct netdev_queue *txq;
 	struct Qdisc *q;
 	int rc = -ENOMEM;
+
+	if (dev && !strcmp(dev->name, "wlan1"))
+		printk(KERN_ERR "CHDBG: dev_queue_xmit ENTRY dev=wlan1 skb_len=%u dev_flags=0x%x\n",
+			skb->len, dev->flags);
 
 	/* Disable soft irqs for various locks below. Also
 	 * stops preemption for RCU.
