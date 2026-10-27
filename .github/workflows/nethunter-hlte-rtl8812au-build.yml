@@ -554,6 +554,17 @@ jobs:
           print("patched in-place monitor-mode netdev_ops swap OK")
           PYEOF5
 
+      - name: Diagnose whether change_iface / netdev_ops swap actually fires for wlan1
+        # The previous fix compiled and runs, but the user still gets 0%
+        # injection directly on wlan1 with zero "monitor xmit ENTRY" lines in
+        # dmesg at all - meaning packets never reach
+        # rtw_cfg80211_monitor_if_xmit_entry. That could mean either
+        # cfg80211_rtw_change_iface() never runs for "iw dev wlan1 set type
+        # monitor", or it runs but the netdev_ops swap doesn't take. Add
+        # explicit tracing at function entry and at the swap decision itself
+        # so the next dmesg capture tells us which.
+        run: python3 kernel/.github/scripts/patch_change_iface_debug.py
+
       - name: Fix TX power reporting stubs (get_tx_power was hardcoded to 12)
         # cfg80211_rtw_get_txpower() always returned a hardcoded 12, and the
         # HAL function it should delegate to (PHY_GetTxPowerLevel8812) is
