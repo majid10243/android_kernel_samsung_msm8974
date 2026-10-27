@@ -565,6 +565,26 @@ jobs:
         # so the next dmesg capture tells us which.
         run: python3 kernel/.github/scripts/patch_change_iface_debug.py
 
+      - name: Fix wlan1 0% injection root cause (carrier off -> noop qdisc)
+        # Found via the kernel-core CHDBG tracing above: aireplay-ng's
+        # packets DO reach dev_queue_xmit()/__dev_xmit_skb() for wlan1, but
+        # the qdisc attached is the kernel's built-in noop_qdisc
+        # (enqueue=noop_enqueue), which unconditionally kfree_skb()s every
+        # packet - they never even reach the driver's ndo_start_xmit.
+        # net/sched/sch_generic.c's dev_activate() only promotes the qdisc
+        # from noop_qdisc to a real pfifo_fast queue when
+        # netif_carrier_ok(dev) is true; otherwise it bails out early and
+        # noop_qdisc stays attached permanently. wlan1 is the long-lived
+        # station interface - the driver's own disconnect/close path
+        # already called netif_carrier_off() on it at some point, and
+        # nothing in the monitor-mode switch path ever turns carrier back
+        # on. A brand-new device (like the old separate "mon1" interface
+        # workaround) starts with carrier OK by default, which is exactly
+        # why that workaround never hit this bug. Force netif_carrier_on()
+        # when switching wlan1 to monitor type, before "ip link set wlan1
+        # up" runs dev_activate(), so the real queue gets attached.
+        run: python3 kernel/.github/scripts/patch_wlan1_carrier_fix.py
+
       - name: Fix TX power reporting stubs (get_tx_power was hardcoded to 12)
         # cfg80211_rtw_get_txpower() always returned a hardcoded 12, and the
         # HAL function it should delegate to (PHY_GetTxPowerLevel8812) is
