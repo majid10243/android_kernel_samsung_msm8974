@@ -41,6 +41,26 @@ anchor1 = 'static void _rtw_regd_init_wiphy(struct rtw_regulatory *reg, struct w
 assert s1.count(anchor1) == 1, "anchor1 not found/unique"
 s1 = s1.replace(anchor1, dump_helper + '\n' + anchor1, 1)
 
+# CHDBG_dump_power() is DEFINED just above _rtw_regd_init_wiphy() (near the
+# bottom of the file), but it is CALLED earlier in the file inside
+# _rtw_reg_notifier() too. This driver is built with -Werror and this
+# kernel's cc1 treats implicit-function-declaration as an error (and then a
+# second error for the later "static" definition conflicting with the
+# earlier implicit one), so a forward declaration near the top of the file
+# (right after _rtw_is_radar_freq, before anything calls it) is required.
+anchor_fwd = (
+	'static bool _rtw_is_radar_freq(u16 center_freq)\n'
+	'{\n'
+	'\treturn (center_freq >= 5260 && center_freq <= 5700);\n'
+	'}\n'
+)
+assert s1.count(anchor_fwd) == 1, "anchor_fwd not found/unique"
+s1 = s1.replace(
+	anchor_fwd,
+	anchor_fwd + '\nstatic void CHDBG_dump_power(struct wiphy *wiphy, const char *tag);\n',
+	1,
+)
+
 old2 = (
 	'\tregd = _rtw_regdomain_select(reg);\n'
 	'\twiphy_apply_custom_regulatory(wiphy, regd);\n'
