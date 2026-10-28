@@ -563,7 +563,16 @@ jobs:
         # monitor", or it runs but the netdev_ops swap doesn't take. Add
         # explicit tracing at function entry and at the swap decision itself
         # so the next dmesg capture tells us which.
-        run: python3 kernel/.github/scripts/patch_change_iface_debug.py
+        run: |
+          set +e
+          python3 kernel/.github/scripts/patch_change_iface_debug.py > patch_change_iface_debug.log 2>&1
+          rc=$?
+          cat patch_change_iface_debug.log
+          if [ $rc -ne 0 ]; then
+            TXT=$(tail -c 3000 patch_change_iface_debug.log | python3 -c "import sys; t=sys.stdin.read().replace(chr(37),'%25').replace(chr(13),'').replace(chr(10),'%0A'); print(t)")
+            echo "::error::PATCH_CHANGE_IFACE_DEBUG FAILED rc=$rc :%0A$TXT"
+            exit 1
+          fi
 
       - name: Fix wlan1 0% injection root cause (carrier off -> noop qdisc)
         # Found via the kernel-core CHDBG tracing above: aireplay-ng's
@@ -583,7 +592,16 @@ jobs:
         # why that workaround never hit this bug. Force netif_carrier_on()
         # when switching wlan1 to monitor type, before "ip link set wlan1
         # up" runs dev_activate(), so the real queue gets attached.
-        run: python3 kernel/.github/scripts/patch_wlan1_carrier_fix.py
+        run: |
+          set +e
+          python3 kernel/.github/scripts/patch_wlan1_carrier_fix.py > patch_wlan1_carrier_fix.log 2>&1
+          rc=$?
+          cat patch_wlan1_carrier_fix.log
+          if [ $rc -ne 0 ]; then
+            TXT=$(tail -c 3000 patch_wlan1_carrier_fix.log | python3 -c "import sys; t=sys.stdin.read().replace(chr(37),'%25').replace(chr(13),'').replace(chr(10),'%0A'); print(t)")
+            echo "::error::PATCH_WLAN1_CARRIER_FIX FAILED rc=$rc :%0A$TXT"
+            exit 1
+          fi
 
       - name: Diagnose 5GHz regulatory power/DFS regression (30dBm -> 20dBm)
         # AWUS036ACH's driver-side custom regdomain table (rtw_regdom_rd)
@@ -603,7 +621,16 @@ jobs:
         # byte, the module-param channel plan, AutoLoadFail, and the final
         # ChannelPlan chosen) so the next dmesg capture shows exactly what
         # is applied, when, and in response to what regulatory event.
-        run: python3 kernel/.github/scripts/patch_regd_debug.py
+        run: |
+          set +e
+          python3 kernel/.github/scripts/patch_regd_debug.py > patch_regd_debug.log 2>&1
+          rc=$?
+          cat patch_regd_debug.log
+          if [ $rc -ne 0 ]; then
+            TXT=$(tail -c 3000 patch_regd_debug.log | python3 -c "import sys; t=sys.stdin.read().replace(chr(37),'%25').replace(chr(13),'').replace(chr(10),'%0A'); print(t)")
+            echo "::error::PATCH_REGD_DEBUG FAILED rc=$rc :%0A$TXT"
+            exit 1
+          fi
 
       - name: Fix TX power reporting stubs (get_tx_power was hardcoded to 12)
         # cfg80211_rtw_get_txpower() always returned a hardcoded 12, and the
