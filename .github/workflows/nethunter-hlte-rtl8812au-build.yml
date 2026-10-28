@@ -585,6 +585,26 @@ jobs:
         # up" runs dev_activate(), so the real queue gets attached.
         run: python3 kernel/.github/scripts/patch_wlan1_carrier_fix.py
 
+      - name: Diagnose 5GHz regulatory power/DFS regression (30dBm -> 20dBm)
+        # AWUS036ACH's driver-side custom regdomain table (rtw_regdom_rd)
+        # unconditionally defines 30dBm for all 5GHz rules - there is no
+        # 20dBm rule anywhere in it for that band. So a session that reports
+        # 20dBm with DFS channels disabled on 5GHz cannot be reading this
+        # driver's own table at all; it must be falling back to cfg80211's
+        # generic/conservative world table instead, for a reason not yet
+        # confirmed. Removing "iw reg set BO" from the boot scripts (an
+        # earlier hypothesis) was verified flashed but did NOT fix it, so
+        # the actual trigger is still unknown. This adds direct printk
+        # tracing (CHDBG-REGD prefix) in wifi_regd.c (around
+        # wiphy_apply_custom_regulatory() and every rtw_reg_notifier() call,
+        # dumping per-channel flags/max_power/max_reg_power for a
+        # representative 2.4GHz and 5GHz channel each time) and in
+        # Hal_ReadChannelPlan8812A() (dumping the raw EEPROM channel-plan
+        # byte, the module-param channel plan, AutoLoadFail, and the final
+        # ChannelPlan chosen) so the next dmesg capture shows exactly what
+        # is applied, when, and in response to what regulatory event.
+        run: python3 kernel/.github/scripts/patch_regd_debug.py
+
       - name: Fix TX power reporting stubs (get_tx_power was hardcoded to 12)
         # cfg80211_rtw_get_txpower() always returned a hardcoded 12, and the
         # HAL function it should delegate to (PHY_GetTxPowerLevel8812) is
